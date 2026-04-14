@@ -5,10 +5,12 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 import os
+import json
 from pathlib import Path
 
 app = FastAPI(title="Mergington High School API",
@@ -78,9 +80,30 @@ activities = {
 }
 
 
+# Load teachers from JSON
+with open(Path(__file__).parent.parent / "teachers.json") as f:
+    teachers = json.load(f)
+
+logged_in_users = set()
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
+
+
+@app.post("/login")
+def login(request: LoginRequest):
+    for teacher in teachers:
+        if teacher["username"] == request.username and teacher["password"] == request.password:
+            logged_in_users.add(request.username)
+            return {"token": request.username}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 @app.get("/activities")
@@ -89,8 +112,15 @@ def get_activities():
 
 
 @app.post("/activities/{activity_name}/signup")
-def signup_for_activity(activity_name: str, email: str):
-    """Sign up a student for an activity"""
+def signup_for_activity(activity_name: str, email: str, authorization: str = Header(None)):
+    """Sign up a student for an activity (admin only)"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="Admin authorization required")
+    
+    token = authorization.replace("Bearer ", "")
+    if token not in logged_in_users:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
@@ -105,14 +135,28 @@ def signup_for_activity(activity_name: str, email: str):
             detail="Student is already signed up"
         )
 
+    # Check if activity is full
+    if len(activity["participants"]) >= activity["max_participants"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Activity is full"
+        )
+
     # Add student
     activity["participants"].append(email)
     return {"message": f"Signed up {email} for {activity_name}"}
 
 
 @app.delete("/activities/{activity_name}/unregister")
-def unregister_from_activity(activity_name: str, email: str):
-    """Unregister a student from an activity"""
+def unregister_from_activity(activity_name: str, email: str, authorization: str = Header(None)):
+    """Unregister a student from an activity (admin only)"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="Admin authorization required")
+    
+    token = authorization.replace("Bearer ", "")
+    if token not in logged_in_users:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
     # Validate activity exists
     if activity_name not in activities:
         raise HTTPException(status_code=404, detail="Activity not found")
